@@ -1,51 +1,253 @@
 document.addEventListener('DOMContentLoaded', function() {
+    // заменить
+    const BASE_API_URL = 'https://';
+    
+    // Получаем контексты для графиков
     const ctx = document.getElementById('attendanceChart').getContext('2d');
     const pieCtx = document.getElementById('pieChart').getContext('2d');
     
-    // Вместимость аудиторий
-    const roomCapacity = {
-        '101': 35,
-        '102': 30,
-        '103': 25,
-        '201': 40,
-        '202': 20
+    // Конфигурация данных
+    const config = {
+        colors: {
+            primary: 'rgba(30, 136, 229, 1)',
+            primaryLight: 'rgba(30, 136, 229, 0.2)',
+            danger: 'rgba(255, 99, 132, 0.8)'
+        }
     };
     
-    // Данные для графика (время и количество людей)
-    const timeLabels = ['9:00', '10:45', '12:30', '14:45', '16:30', '18:10', '19:45'];
+    // Текущее состояние приложения
+    let state = {
+        currentRoom: null,
+        rooms: [],
+        currentDate: document.getElementById('date').value,
+        peopleData: [],
+        selectedTimeIndex: 0,
+        timeLabels: []
+    };
     
-    // Инициализация данных
-    let currentRoom = '101';
-    let peopleData = generateRandomData(roomCapacity[currentRoom]);
-    
-    // Основной график
-    const chart = new Chart(ctx, {
+    // Инициализация графиков с пустыми данными
+    const attendanceChart = new Chart(ctx, {
         type: 'line',
-        data: {
-            labels: timeLabels,
-            datasets: [{
-                label: 'Количество людей',
-                data: peopleData,
-                backgroundColor: 'rgba(30, 136, 229, 0.2)',
-                borderColor: 'rgba(30, 136, 229, 1)',
-                borderWidth: 2,
-                tension: 0.4,
-                fill: true
-            }]
-        },
-        options: {
+        data: { labels: [], datasets: [] },
+        options: getMainChartOptions()
+    });
+
+    const pieChart = new Chart(pieCtx, {
+        type: 'pie',
+        data: { labels: [], datasets: [] },
+        options: getPieChartOptions()
+    });
+
+    // Функция для загрузки данных с сервера
+    async function fetchData() {
+        try {
+            // Показываем индикатор загрузки
+            document.getElementById('loadingIndicator').style.display = 'block';
+            
+            // Загрузка списка аудиторий
+            const roomsResponse = await fetch(`${BASE_API_URL}/rooms`, {
+                headers: getAuthHeaders()
+            });
+            
+            if (!roomsResponse.ok) {
+                throw new Error(`HTTP error! status: ${roomsResponse.status}`);
+            }
+            
+            state.rooms = await roomsResponse.json();
+            
+            // Заполняем select аудиториями
+            const roomSelect = document.getElementById('room');
+            roomSelect.innerHTML = '';
+            state.rooms.forEach(room => {
+                const option = document.createElement('option');
+                option.value = room.id;
+                option.textContent = `${room.name} (${room.capacity} мест)`;
+                roomSelect.appendChild(option);
+            });
+            
+            // Загружаем данные для первой аудитории
+            if (state.rooms.length > 0) {
+                state.currentRoom = state.rooms[0].id;
+                await loadRoomData(state.currentRoom);
+            }
+        } catch (error) {
+            console.error('Ошибка загрузки данных:', error);
+            showError(`Произошла ошибка при загрузке данных: ${error.message}`);
+        } finally {
+            document.getElementById('loadingIndicator').style.display = 'none';
+        }
+    }
+
+    // Загрузка данных для конкретной аудитории
+    async function loadRoomData(roomId) {
+        try {
+            document.getElementById('loadingIndicator').style.display = 'block';
+            
+            const response = await fetch(`${BASE_API_URL}/attendance?room=${roomId}&date=${state.currentDate}`, {
+                headers: getAuthHeaders()
+            });
+            
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            
+            const data = await response.json();
+            
+            state.timeLabels = data.timeLabels;
+            state.peopleData = data.attendanceData;
+            
+            // Обновляем графики
+            updateCharts();
+        } catch (error) {
+            console.error('Ошибка загрузки данных аудитории:', error);
+            showError(`Ошибка загрузки данных аудитории: ${error.message}`);
+        } finally {
+            document.getElementById('loadingIndicator').style.display = 'none';
+        }
+    }
+
+    // Получение заголовков авторизации
+    function getAuthHeaders() {
+        const token = localStorage.getItem('authToken');
+        return token ? { 'Authorization': `Bearer ${token}` } : {};
+    }
+
+    // Показать ошибку
+    function showError(message) {
+        const errorElement = document.getElementById('errorMessage');
+        errorElement.textContent = message;
+        errorElement.style.display = 'block';
+        
+        setTimeout(() => {
+            errorElement.style.display = 'none';
+        }, 5000);
+    }
+
+    // Обновление графиков с текущими данными
+    function updateCharts() {
+        // Основной график
+        attendanceChart.data.labels = state.timeLabels;
+        attendanceChart.data.datasets = [{
+            label: 'Количество людей',
+            data: state.peopleData,
+            backgroundColor: config.colors.primaryLight,
+            borderColor: config.colors.primary,
+            borderWidth: 2,
+            tension: 0.4,
+            fill: true,
+            pointBackgroundColor: config.colors.primary,
+            pointHoverRadius: 6
+        }];
+        
+        // Находим текущую аудиторию
+        const currentRoom = state.rooms.find(r => r.id === state.currentRoom);
+        if (currentRoom) {
+            attendanceChart.options.scales.y.max = currentRoom.capacity;
+        }
+        
+        attendanceChart.update();
+        updatePieChart(state.selectedTimeIndex);
+    }
+
+    // Обновление круговой диаграммы
+    function updatePieChart(index) {
+        if (state.peopleData.length === 0) return;
+        
+        state.selectedTimeIndex = index;
+        const selectedTime = state.timeLabels[index];
+        const present = state.peopleData[index];
+        
+        // Находим текущую аудиторию
+        const currentRoom = state.rooms.find(r => r.id === state.currentRoom);
+        if (!currentRoom) return;
+        
+        const total = currentRoom.capacity;
+        const absent = total - present;
+        const presentPercentage = Math.round((present / total) * 100);
+        
+        // Обновляем данные диаграммы
+        pieChart.data.labels = ['Присутствовали', 'Отсутствовали'];
+        pieChart.data.datasets = [{
+            data: [present, absent],
+            backgroundColor: [config.colors.primary, config.colors.danger],
+            borderWidth: 1
+        }];
+        pieChart.update();
+        
+        // Обновляем текстовую информацию
+        document.getElementById('selectedTime').textContent = selectedTime;
+        document.getElementById('totalSeats').textContent = total;
+        document.getElementById('presentCount').textContent = present;
+        document.getElementById('attendancePercent').textContent = `${presentPercentage}%`;
+    }
+
+    // Обработчики событий
+    function setupEventListeners() {
+        // Изменение аудитории
+        document.getElementById('room').addEventListener('change', async function() {
+            state.currentRoom = this.value;
+            await loadRoomData(state.currentRoom);
+        });
+
+        // Изменение даты
+        document.getElementById('date').addEventListener('change', async function() {
+            state.currentDate = this.value;
+            if (state.currentRoom) {
+                await loadRoomData(state.currentRoom);
+            }
+        });
+        
+        // Клик по графику
+        ctx.canvas.addEventListener('click', function(event) {
+            const elements = attendanceChart.getElementsAtEventForMode(
+                event, 'nearest', { intersect: true }, true
+            );
+            if (elements.length > 0) {
+                updatePieChart(elements[0].index);
+            }
+        });
+        
+        // Кнопка выхода
+        document.querySelector('.logout-button').addEventListener('click', function() {
+            localStorage.removeItem('authToken');
+            window.location.href = '/logout';
+        });
+        
+        // Навигация в сайдбаре
+        document.querySelectorAll('nav a').forEach(link => {
+            link.addEventListener('click', function(e) {
+                e.preventDefault();
+                const target = this.getAttribute('href').substring(1);
+                navigateTo(target);
+            });
+        });
+    }
+    
+    // Навигация между страницами
+    function navigateTo(page) {
+        switch(page) {
+            case 'users':
+                window.location.href = '/users';
+                break;
+            case 'rooms':
+                window.location.href = '/rooms';
+                break;
+            case 'statistics':
+                // Уже на этой странице
+                break;
+            default:
+                console.warn('Неизвестная страница:', page);
+        }
+    }
+
+    // Настройки основного графика
+    function getMainChartOptions() {
+        return {
             responsive: true,
             maintainAspectRatio: false,
-            onClick: (e, elements) => {
-                if (elements.length > 0) {
-                    const index = elements[0].index;
-                    updatePieChart(index);
-                }
-            },
             scales: {
                 y: {
                     beginAtZero: true,
-                    max: roomCapacity[currentRoom],
                     title: {
                         display: true,
                         text: 'Количество людей'
@@ -67,26 +269,25 @@ document.addEventListener('DOMContentLoaded', function() {
                     intersect: false,
                     callbacks: {
                         label: function(context) {
-                            return `${context.dataset.label}: ${context.raw} из ${roomCapacity[currentRoom]}`;
+                            const currentRoom = state.rooms.find(r => r.id === state.currentRoom);
+                            const total = currentRoom ? currentRoom.capacity : 0;
+                            return `${context.dataset.label}: ${context.raw} из ${total}`;
                         }
                     }
                 }
+            },
+            elements: {
+                point: {
+                    hoverRadius: 6,
+                    radius: 4
+                }
             }
-        }
-    });
+        };
+    }
 
-    // Круговая диаграмма
-    const pieChart = new Chart(pieCtx, {
-        type: 'pie',
-        data: {
-            labels: ['Присутствовали', 'Отсутствовали'],
-            datasets: [{
-                data: [0, 0],
-                backgroundColor: ['rgba(30, 136, 229, 0.8)', 'rgba(255, 99, 132, 0.8)'],
-                borderWidth: 1
-            }]
-        },
-        options: {
+    // Настройки круговой диаграммы
+    function getPieChartOptions() {
+        return {
             responsive: true,
             maintainAspectRatio: false,
             plugins: {
@@ -101,77 +302,25 @@ document.addEventListener('DOMContentLoaded', function() {
                             return `${context.label}: ${context.raw} (${percentage}%)`;
                         }
                     }
-                },
-                datalabels: {
-                    formatter: (value, context) => {
-                        const total = context.dataset.data.reduce((a, b) => a + b, 0);
-                        const percentage = Math.round((value / total) * 100);
-                        return `${percentage}%`;
-                    },
-                    color: '#fff',
-                    font: {
-                        weight: 'bold'
-                    }
                 }
             }
-        },
-        plugins: [ChartDataLabels]
-    });
-
-    // Обновление круговой диаграммы
-    function updatePieChart(index) {
-        const selectedTime = timeLabels[index];
-        const present = peopleData[index];
-        const total = roomCapacity[currentRoom];
-        const absent = total - present;
-        const presentPercentage = Math.round((present / total) * 100);
-        
-        pieChart.data.datasets[0].data = [present, absent];
-        pieChart.update();
-        
-        document.getElementById('selectedTime').textContent = selectedTime;
-        document.getElementById('totalSeats').textContent = total;
-        document.getElementById('presentCount').textContent = present;
-        document.getElementById('attendancePercent').textContent = `${presentPercentage}%`;
+        };
     }
 
-    // Генерация случайных данных
-    function generateRandomData(max) {
-        return timeLabels.map(() => Math.floor(Math.random() * max * 0.8) + Math.floor(max * 0.2));
+    // Проверка аутентификации
+    function checkAuth() {
+        const token = localStorage.getItem('authToken');
+        if (!token) {
+            window.location.href = '/login';
+        }
     }
 
-    // Обработчики изменения фильтров
-    document.getElementById('room').addEventListener('change', function() {
-        currentRoom = this.value.split(' ')[0];
-        peopleData = generateRandomData(roomCapacity[currentRoom]);
-        
-        // Обновляем основной график
-        chart.data.datasets[0].data = peopleData;
-        chart.options.scales.y.max = roomCapacity[currentRoom];
-        chart.update();
-        
-        // Сбрасываем круговую диаграмму
-        resetPieChart();
-    });
-
-    document.getElementById('date').addEventListener('change', function() {
-        peopleData = generateRandomData(roomCapacity[currentRoom]);
-        chart.data.datasets[0].data = peopleData;
-        chart.update();
-        resetPieChart();
-    });
-    
-    // Сброс круговой диаграммы
-    function resetPieChart() {
-        pieChart.data.datasets[0].data = [0, 0];
-        pieChart.update();
-        
-        document.getElementById('selectedTime').textContent = '-';
-        document.getElementById('totalSeats').textContent = '0';
-        document.getElementById('presentCount').textContent = '0';
-        document.getElementById('attendancePercent').textContent = '0%';
+    // Инициализация приложения
+    async function init() {
+        checkAuth();
+        setupEventListeners();
+        await fetchData();
     }
-    
-    // Инициализация с первой парой
-    updatePieChart(0);
+
+    init();
 });
