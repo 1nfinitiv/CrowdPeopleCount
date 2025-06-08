@@ -16,7 +16,7 @@
                 <span class="logo-text">Панель пользователя</span>
             </div>
             <nav>
-                <a href="#"><i class="fas fa-chalkboard"></i> Аудитории</a>
+                <i</a>
                 <a href="#" class="active"><i class="fas fa-chart-bar"></i> Статистика</a>
             </nav>
         </div>
